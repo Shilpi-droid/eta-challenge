@@ -27,6 +27,9 @@ import xgboost as xgb
 
 DATA_DIR = Path(__file__).parent / "data"
 MODEL_PATH = Path(__file__).parent / "model.pkl"
+EXPERIMENTS_PATH = Path(__file__).parent / "experiments.csv"
+
+EXPERIMENT = "baseline run"
 
 FEATURES = ["pickup_zone", "dropoff_zone", "hour", "dow", "month", "passenger_count"]
 
@@ -86,6 +89,13 @@ def main() -> None:
     with open(MODEL_PATH, "wb") as f:
         pickle.dump(model, f)
     print(f"Saved model to {MODEL_PATH}")
+
+    write_header = not EXPERIMENTS_PATH.exists() or EXPERIMENTS_PATH.stat().st_size == 0
+    with open(EXPERIMENTS_PATH, "a", newline="") as f:
+        if write_header:
+            f.write("Experiment,MAE\n")
+        f.write(f"{EXPERIMENT},{mae:.1f}\n")
+    print(f"Logged to {EXPERIMENTS_PATH}")
 
 
 if __name__ == "__main__":
