@@ -29,7 +29,7 @@ DATA_DIR = Path(__file__).parent / "data"
 MODEL_PATH = Path(__file__).parent / "model.pkl"
 EXPERIMENTS_PATH = Path(__file__).parent / "experiments.csv"
 
-EXPERIMENT = "zone-pair avg feature"
+EXPERIMENT = "hour-dow target encoding"
 
 FEATURES = [
     "pickup_zone",
@@ -39,29 +39,34 @@ FEATURES = [
     "month",
     "passenger_count",
     "zone_pair_avg_duration",
+    "hour_dow_avg_duration",
 ]
 
-def build_zone_pair_lookup(df: pd.DataFrame) -> tuple[pd.Series, float]:
-    """Compute mean duration per (pickup_zone, dropoff_zone) pair from training data.
 
-    Returns the lookup Series and the global mean fallback value.
-    """
+def build_lookups(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, float]:
+    """Build zone-pair and (hour, dow) mean-duration lookups from training data."""
     global_mean = float(df["duration_seconds"].mean())
-    lookup = (
-        df.groupby(["pickup_zone", "dropoff_zone"])["duration_seconds"]
-        .mean()
-    )
-    return lookup, global_mean
-    
+    zone_pair_lookup = df.groupby(["pickup_zone", "dropoff_zone"])["duration_seconds"].mean()
+    ts = pd.to_datetime(df["requested_at"])
+    tmp = df[["duration_seconds"]].copy()
+    tmp["hour"] = ts.dt.hour
+    tmp["dow"] = ts.dt.dayofweek
+    hour_dow_lookup = tmp.groupby(["hour", "dow"])["duration_seconds"].mean()
+    return zone_pair_lookup, hour_dow_lookup, global_mean
+
+
 def engineer_features(
     df: pd.DataFrame,
     zone_pair_lookup: pd.Series,
+    hour_dow_lookup: pd.Series,
     global_mean: float,
 ) -> pd.DataFrame:
     """Turn raw request columns into model features."""
     ts = pd.to_datetime(df["requested_at"])
+    hour = ts.dt.hour.astype("int8")
+    dow = ts.dt.dayofweek.astype("int8")
 
-    # Vectorized merge instead of a Python loop — ~100x faster on large DataFrames
+    # Zone-pair target encoding — vectorized merge
     lookup_df = zone_pair_lookup.rename("zone_pair_avg_duration").reset_index()
     zone_pair_avg = (
         df[["pickup_zone", "dropoff_zone"]]
@@ -71,14 +76,25 @@ def engineer_features(
         .to_numpy()
     )
 
+    # (hour, dow) target encoding — vectorized merge
+    tmp = pd.DataFrame({"hour": hour.values, "dow": dow.values})
+    lookup_hd = hour_dow_lookup.rename("hour_dow_avg_duration").reset_index()
+    hour_dow_avg = (
+        tmp.merge(lookup_hd, on=["hour", "dow"], how="left")["hour_dow_avg_duration"]
+        .fillna(global_mean)
+        .astype("float32")
+        .to_numpy()
+    )
+
     return pd.DataFrame({
         "pickup_zone":            df["pickup_zone"].astype("int32"),
         "dropoff_zone":           df["dropoff_zone"].astype("int32"),
-        "hour":                   ts.dt.hour.astype("int8"),
-        "dow":                    ts.dt.dayofweek.astype("int8"),
+        "hour":                   hour,
+        "dow":                    dow,
         "month":                  ts.dt.month.astype("int8"),
         "passenger_count":        df["passenger_count"].astype("int8"),
         "zone_pair_avg_duration": zone_pair_avg,
+        "hour_dow_avg_duration":  hour_dow_avg,
     })[FEATURES]
 
 
@@ -97,13 +113,13 @@ def main() -> None:
     print(f"  train: {len(train):,} rows")
     print(f"  dev:   {len(dev):,} rows")
 
-    print("Building zone-pair lookup table...")
-    zone_pair_lookup, global_mean = build_zone_pair_lookup(train)
-    print(f"  {len(zone_pair_lookup):,} unique zone pairs  |  global mean: {global_mean:.1f}s")
+    print("Building lookup tables...")
+    zone_pair_lookup, hour_dow_lookup, global_mean = build_lookups(train)
+    print(f"  {len(zone_pair_lookup):,} zone pairs  |  {len(hour_dow_lookup)} hour-dow combos  |  global mean: {global_mean:.1f}s")
 
-    X_train = engineer_features(train, zone_pair_lookup, global_mean)
+    X_train = engineer_features(train, zone_pair_lookup, hour_dow_lookup, global_mean)
     y_train = train["duration_seconds"].to_numpy()
-    X_dev = engineer_features(dev, zone_pair_lookup, global_mean)
+    X_dev = engineer_features(dev, zone_pair_lookup, hour_dow_lookup, global_mean)
     y_dev = dev["duration_seconds"].to_numpy()
 
     print("\nTraining XGBoost...")
@@ -130,6 +146,7 @@ def main() -> None:
     artifact = {
         "model": model,
         "zone_pair_lookup": {(int(k[0]), int(k[1])): float(v) for k, v in zone_pair_lookup.items()},
+        "hour_dow_lookup": {(int(k[0]), int(k[1])): float(v) for k, v in hour_dow_lookup.items()},
         "global_mean": global_mean,
     }
     with open(MODEL_PATH, "wb") as f:

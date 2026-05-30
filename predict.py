@@ -19,6 +19,7 @@ with open(_MODEL_PATH, "rb") as _f:
 
 _MODEL = _ARTIFACT["model"]
 _ZONE_PAIR_DICT: dict[tuple[int, int], float] = _ARTIFACT["zone_pair_lookup"]
+_HOUR_DOW_DICT: dict[tuple[int, int], float] = _ARTIFACT["hour_dow_lookup"]
 _GLOBAL_MEAN: float = _ARTIFACT["global_mean"]
 
 # Disable xgboost's feature-name validation so we can predict on a bare
@@ -43,10 +44,12 @@ def predict(request: dict) -> float:
     pickup = int(request["pickup_zone"])
     dropoff = int(request["dropoff_zone"])
 
+    hour, dow = ts.hour, ts.weekday()
     row = [
-        pickup, dropoff, ts.hour, ts.weekday(), ts.month,
+        pickup, dropoff, hour, dow, ts.month,
         int(request["passenger_count"]),
         _ZONE_PAIR_DICT.get((pickup, dropoff), _GLOBAL_MEAN),
+        _HOUR_DOW_DICT.get((hour, dow), _GLOBAL_MEAN),
     ]
 
     x = np.array([row], dtype=np.float32)
