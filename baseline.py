@@ -127,10 +127,9 @@ def main() -> None:
     mae = float(np.mean(np.abs(preds - y_dev)))
     print(f"\nDev MAE: {mae:.1f} seconds")
 
-    # Bundle the lookup table with the model so predict.py can use it
     artifact = {
         "model": model,
-        "zone_pair_lookup": zone_pair_lookup,
+        "zone_pair_lookup": {(int(k[0]), int(k[1])): float(v) for k, v in zone_pair_lookup.items()},
         "global_mean": global_mean,
     }
     with open(MODEL_PATH, "wb") as f:
