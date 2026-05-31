@@ -35,12 +35,6 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
     return 2 * _R * math.asin(math.sqrt(a))
 
-# Disable xgboost's feature-name validation so we can predict on a bare
-# numpy array (skips per-call DataFrame construction overhead).
-if hasattr(_MODEL, "get_booster"):
-    _MODEL.get_booster().feature_names = None
-
-
 
 def predict(request: dict) -> float:
     """Predict trip duration in seconds.
@@ -62,14 +56,14 @@ def predict(request: dict) -> float:
     d_lat, d_lon = _ZONE_COORDS.get(dropoff, (_NYC_LAT, _NYC_LON))
     zone_pair_avg = _ZONE_PAIR_DICT.get((pickup, dropoff), _GLOBAL_MEAN)
     zone_pair_hour_avg = _ZONE_PAIR_HOUR_DICT.get((pickup, dropoff, hour), zone_pair_avg)
-    row = [
+
+    x = np.array([[
         pickup, dropoff, hour, dow, ts.month,
         int(request["passenger_count"]),
         zone_pair_avg,
         _HOUR_DOW_DICT.get((hour, dow), _GLOBAL_MEAN),
         _haversine_km(p_lat, p_lon, d_lat, d_lon),
         zone_pair_hour_avg,
-    ]
+    ]], dtype=np.float32)
 
-    x = np.array([row], dtype=np.float32)
     return float(_MODEL.predict(x)[0])

@@ -21,17 +21,15 @@ import pickle
 import time
 from pathlib import Path
 
-# import lightgbm as lgb
 from catboost import CatBoostRegressor
 import numpy as np
 import pandas as pd
-# import xgboost as xgb
 
 DATA_DIR = Path(__file__).parent / "data"
 MODEL_PATH = Path(__file__).parent / "model.pkl"
 EXPERIMENTS_PATH = Path(__file__).parent / "experiments.csv"
 
-EXPERIMENT = "catboost"
+EXPERIMENT = "reverted to simple catboost"
 
 FEATURES = [
     "pickup_zone",
@@ -179,46 +177,6 @@ def main() -> None:
     y_train = train["duration_seconds"].to_numpy()
     X_dev = engineer_features(dev, zone_pair_lookup, hour_dow_lookup, zone_pair_hour_lookup, global_mean, zone_coords)
     y_dev = dev["duration_seconds"].to_numpy()
-
-    # print("\nTraining XGBoost...")
-    # model = xgb.XGBRegressor(
-    #     n_estimators=1000,
-    #     max_depth=6,
-    #     learning_rate=0.05,
-    #     subsample=0.8,
-    #     colsample_bytree=0.8,
-    #     tree_method="hist",
-    #     n_jobs=-1,
-    #     random_state=42,
-    #     early_stopping_rounds=20,
-    #     eval_metric="mae",
-    # )
-    # t0 = time.time()
-    # model.fit(X_train, y_train, eval_set=[(X_dev, y_dev)], verbose=50)
-    # print(f"  trained in {time.time() - t0:.0f}s  |  best iteration: {model.best_iteration}")
-
-    # print("\nTraining LightGBM...")
-    # model = lgb.LGBMRegressor(
-    #     n_estimators=1000,
-    #     max_depth=8,
-    #     learning_rate=0.05,
-    #     subsample=0.8,
-    #     colsample_bytree=0.8,
-    #     n_jobs=-1,
-    #     random_state=42,
-    #     verbose=-1,
-    # )
-    # t0 = time.time()
-    # model.fit(
-    #     X_train, y_train,
-    #     eval_set=[(X_dev, y_dev)],
-    #     eval_metric="mae",
-    #     callbacks=[
-    #         lgb.early_stopping(stopping_rounds=20, verbose=True),
-    #         lgb.log_evaluation(period=50),
-    #     ],
-    # )
-    # print(f"  trained in {time.time() - t0:.0f}s  |  best iteration: {model.best_iteration_}")
 
     print("\nTraining CatBoost...")
     model = CatBoostRegressor(
