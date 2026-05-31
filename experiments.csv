@@ -5,3 +5,4 @@ zone-pair avg feature-optimised code,289.0
 hour-dow target encoding,287.5
 haversine distance feature,284.9
 zone-pair x hour target encoding,281.1
+lightgbm,278.4
