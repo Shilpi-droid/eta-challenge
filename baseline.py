@@ -29,7 +29,7 @@ DATA_DIR = Path(__file__).parent / "data"
 MODEL_PATH = Path(__file__).parent / "model.pkl"
 EXPERIMENTS_PATH = Path(__file__).parent / "experiments.csv"
 
-EXPERIMENT = "hour-dow target encoding"
+EXPERIMENT = "haversine distance feature"
 
 FEATURES = [
     "pickup_zone",
@@ -40,7 +40,24 @@ FEATURES = [
     "passenger_count",
     "zone_pair_avg_duration",
     "hour_dow_avg_duration",
+    "haversine_km",
 ]
+
+_EARTH_RADIUS_KM = 6371.0
+
+
+def haversine_km(lat1: np.ndarray, lon1: np.ndarray, lat2: np.ndarray, lon2: np.ndarray) -> np.ndarray:
+    """Vectorised Haversine distance in kilometres."""
+    lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
+    dlat, dlon = lat2 - lat1, lon2 - lon1
+    a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
+    return 2 * _EARTH_RADIUS_KM * np.arcsin(np.sqrt(a))
+
+
+def load_zone_coords() -> dict[int, tuple[float, float]]:
+    """Load zone centroid lat/lon from the pre-built CSV."""
+    centroids = pd.read_csv(DATA_DIR / "zone_centroids.csv")
+    return {int(r.LocationID): (float(r.lat), float(r.lon)) for r in centroids.itertuples()}
 
 
 def build_lookups(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, float]:
@@ -60,6 +77,7 @@ def engineer_features(
     zone_pair_lookup: pd.Series,
     hour_dow_lookup: pd.Series,
     global_mean: float,
+    zone_coords: dict[int, tuple[float, float]],
 ) -> pd.DataFrame:
     """Turn raw request columns into model features."""
     ts = pd.to_datetime(df["requested_at"])
@@ -86,6 +104,16 @@ def engineer_features(
         .to_numpy()
     )
 
+    # Haversine distance between zone centroids
+    default_lat, default_lon = 40.7128, -74.0060  # NYC centre fallback
+    pickup_zones = df["pickup_zone"].astype(int).to_numpy()
+    dropoff_zones = df["dropoff_zone"].astype(int).to_numpy()
+    p_lat = np.array([zone_coords.get(z, (default_lat, default_lon))[0] for z in pickup_zones])
+    p_lon = np.array([zone_coords.get(z, (default_lat, default_lon))[1] for z in pickup_zones])
+    d_lat = np.array([zone_coords.get(z, (default_lat, default_lon))[0] for z in dropoff_zones])
+    d_lon = np.array([zone_coords.get(z, (default_lat, default_lon))[1] for z in dropoff_zones])
+    dist_km = haversine_km(p_lat, p_lon, d_lat, d_lon).astype("float32")
+
     return pd.DataFrame({
         "pickup_zone":            df["pickup_zone"].astype("int32"),
         "dropoff_zone":           df["dropoff_zone"].astype("int32"),
@@ -95,6 +123,7 @@ def engineer_features(
         "passenger_count":        df["passenger_count"].astype("int8"),
         "zone_pair_avg_duration": zone_pair_avg,
         "hour_dow_avg_duration":  hour_dow_avg,
+        "haversine_km":           dist_km,
     })[FEATURES]
 
 
@@ -113,13 +142,17 @@ def main() -> None:
     print(f"  train: {len(train):,} rows")
     print(f"  dev:   {len(dev):,} rows")
 
+    print("Loading zone centroids...")
+    zone_coords = load_zone_coords()
+    print(f"  {len(zone_coords)} zones loaded")
+
     print("Building lookup tables...")
     zone_pair_lookup, hour_dow_lookup, global_mean = build_lookups(train)
     print(f"  {len(zone_pair_lookup):,} zone pairs  |  {len(hour_dow_lookup)} hour-dow combos  |  global mean: {global_mean:.1f}s")
 
-    X_train = engineer_features(train, zone_pair_lookup, hour_dow_lookup, global_mean)
+    X_train = engineer_features(train, zone_pair_lookup, hour_dow_lookup, global_mean, zone_coords)
     y_train = train["duration_seconds"].to_numpy()
-    X_dev = engineer_features(dev, zone_pair_lookup, hour_dow_lookup, global_mean)
+    X_dev = engineer_features(dev, zone_pair_lookup, hour_dow_lookup, global_mean, zone_coords)
     y_dev = dev["duration_seconds"].to_numpy()
 
     print("\nTraining XGBoost...")
@@ -148,6 +181,7 @@ def main() -> None:
         "zone_pair_lookup": {(int(k[0]), int(k[1])): float(v) for k, v in zone_pair_lookup.items()},
         "hour_dow_lookup": {(int(k[0]), int(k[1])): float(v) for k, v in hour_dow_lookup.items()},
         "global_mean": global_mean,
+        "zone_coords": zone_coords,
     }
     with open(MODEL_PATH, "wb") as f:
         pickle.dump(artifact, f)

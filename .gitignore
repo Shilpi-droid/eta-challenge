@@ -12,3 +12,15 @@ data/sample_1M.parquet
 
 # Docker cache
 .docker_cache/
+
+# Taxi zone shapefile (download via analyze_zones.py)
+taxi_zones.zip
+taxi_zones/
+taxi_zones.cpg
+taxi_zones.dbf
+taxi_zones.prj
+taxi_zones.shp
+taxi_zones.shx
+
+# Generated images
+*.png
