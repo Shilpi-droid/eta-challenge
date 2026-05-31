@@ -21,7 +21,8 @@ import pickle
 import time
 from pathlib import Path
 
-import lightgbm as lgb
+# import lightgbm as lgb
+from catboost import CatBoostRegressor
 import numpy as np
 import pandas as pd
 # import xgboost as xgb
@@ -30,7 +31,7 @@ DATA_DIR = Path(__file__).parent / "data"
 MODEL_PATH = Path(__file__).parent / "model.pkl"
 EXPERIMENTS_PATH = Path(__file__).parent / "experiments.csv"
 
-EXPERIMENT = "lightgbm"
+EXPERIMENT = "catboost"
 
 FEATURES = [
     "pickup_zone",
@@ -44,6 +45,9 @@ FEATURES = [
     "haversine_km",
     "zone_pair_hour_avg_duration",
 ]
+
+# Columns CatBoost should treat as categorical (integer IDs, not continuous values)
+CAT_FEATURES = ["pickup_zone", "dropoff_zone", "hour", "dow", "month"]
 
 _EARTH_RADIUS_KM = 6371.0
 
@@ -193,27 +197,44 @@ def main() -> None:
     # model.fit(X_train, y_train, eval_set=[(X_dev, y_dev)], verbose=50)
     # print(f"  trained in {time.time() - t0:.0f}s  |  best iteration: {model.best_iteration}")
 
-    print("\nTraining LightGBM...")
-    model = lgb.LGBMRegressor(
-        n_estimators=1000,
-        max_depth=8,
-        learning_rate=0.05,
+    # print("\nTraining LightGBM...")
+    # model = lgb.LGBMRegressor(
+    #     n_estimators=1000,
+    #     max_depth=8,
+    #     learning_rate=0.05,
+    #     subsample=0.8,
+    #     colsample_bytree=0.8,
+    #     n_jobs=-1,
+    #     random_state=42,
+    #     verbose=-1,
+    # )
+    # t0 = time.time()
+    # model.fit(
+    #     X_train, y_train,
+    #     eval_set=[(X_dev, y_dev)],
+    #     eval_metric="mae",
+    #     callbacks=[
+    #         lgb.early_stopping(stopping_rounds=20, verbose=True),
+    #         lgb.log_evaluation(period=50),
+    #     ],
+    # )
+    # print(f"  trained in {time.time() - t0:.0f}s  |  best iteration: {model.best_iteration_}")
+
+    print("\nTraining CatBoost...")
+    model = CatBoostRegressor(
+        iterations=500,
+        depth=6,
+        learning_rate=0.1,
         subsample=0.8,
-        colsample_bytree=0.8,
-        n_jobs=-1,
-        random_state=42,
-        verbose=-1,
+        loss_function="MAE",
+        eval_metric="MAE",
+        early_stopping_rounds=20,
+        random_seed=42,
+        verbose=50,
+        thread_count=-1,
     )
     t0 = time.time()
-    model.fit(
-        X_train, y_train,
-        eval_set=[(X_dev, y_dev)],
-        eval_metric="mae",
-        callbacks=[
-            lgb.early_stopping(stopping_rounds=20, verbose=True),
-            lgb.log_evaluation(period=50),
-        ],
-    )
+    model.fit(X_train, y_train, eval_set=(X_dev, y_dev))
     print(f"  trained in {time.time() - t0:.0f}s  |  best iteration: {model.best_iteration_}")
 
     preds = model.predict(X_dev)

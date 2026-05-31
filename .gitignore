@@ -24,3 +24,10 @@ taxi_zones.shx
 
 # Generated images
 *.png
+
+# CatBoost training artefacts
+catboost_training.json
+learn_error.tsv
+test_error.tsv
+time_left.tsv
+events.out.tfevents*
