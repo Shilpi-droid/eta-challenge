@@ -29,7 +29,7 @@ DATA_DIR = Path(__file__).parent / "data"
 MODEL_PATH = Path(__file__).parent / "model.pkl"
 EXPERIMENTS_PATH = Path(__file__).parent / "experiments.csv"
 
-EXPERIMENT = "haversine distance feature"
+EXPERIMENT = "zone-pair x hour target encoding"
 
 FEATURES = [
     "pickup_zone",
@@ -41,6 +41,7 @@ FEATURES = [
     "zone_pair_avg_duration",
     "hour_dow_avg_duration",
     "haversine_km",
+    "zone_pair_hour_avg_duration",
 ]
 
 _EARTH_RADIUS_KM = 6371.0
@@ -60,22 +61,24 @@ def load_zone_coords() -> dict[int, tuple[float, float]]:
     return {int(r.LocationID): (float(r.lat), float(r.lon)) for r in centroids.itertuples()}
 
 
-def build_lookups(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, float]:
-    """Build zone-pair and (hour, dow) mean-duration lookups from training data."""
+def build_lookups(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, pd.Series, float]:
+    """Build zone-pair, (hour, dow), and (zone-pair, hour) mean-duration lookups."""
     global_mean = float(df["duration_seconds"].mean())
     zone_pair_lookup = df.groupby(["pickup_zone", "dropoff_zone"])["duration_seconds"].mean()
     ts = pd.to_datetime(df["requested_at"])
-    tmp = df[["duration_seconds"]].copy()
+    tmp = df[["pickup_zone", "dropoff_zone", "duration_seconds"]].copy()
     tmp["hour"] = ts.dt.hour
     tmp["dow"] = ts.dt.dayofweek
     hour_dow_lookup = tmp.groupby(["hour", "dow"])["duration_seconds"].mean()
-    return zone_pair_lookup, hour_dow_lookup, global_mean
+    zone_pair_hour_lookup = tmp.groupby(["pickup_zone", "dropoff_zone", "hour"])["duration_seconds"].mean()
+    return zone_pair_lookup, hour_dow_lookup, zone_pair_hour_lookup, global_mean
 
 
 def engineer_features(
     df: pd.DataFrame,
     zone_pair_lookup: pd.Series,
     hour_dow_lookup: pd.Series,
+    zone_pair_hour_lookup: pd.Series,
     global_mean: float,
     zone_coords: dict[int, tuple[float, float]],
 ) -> pd.DataFrame:
@@ -104,6 +107,22 @@ def engineer_features(
         .to_numpy()
     )
 
+    # (zone_pair, hour) target encoding — fallback to zone_pair_avg for sparse combos
+    tmp_zph = pd.DataFrame({
+        "pickup_zone":  df["pickup_zone"].values,
+        "dropoff_zone": df["dropoff_zone"].values,
+        "hour":         hour.values,
+    })
+    lookup_zph = zone_pair_hour_lookup.rename("zone_pair_hour_avg_duration").reset_index()
+    zone_pair_hour_avg = (
+        tmp_zph.merge(lookup_zph, on=["pickup_zone", "dropoff_zone", "hour"], how="left")
+        ["zone_pair_hour_avg_duration"]
+        .to_numpy(dtype="float32")
+    )
+    # Fill unseen (zone_pair, hour) combos with the all-hours zone_pair average
+    nan_mask = np.isnan(zone_pair_hour_avg)
+    zone_pair_hour_avg[nan_mask] = zone_pair_avg[nan_mask]
+
     # Haversine distance between zone centroids
     default_lat, default_lon = 40.7128, -74.0060  # NYC centre fallback
     pickup_zones = df["pickup_zone"].astype(int).to_numpy()
@@ -115,15 +134,16 @@ def engineer_features(
     dist_km = haversine_km(p_lat, p_lon, d_lat, d_lon).astype("float32")
 
     return pd.DataFrame({
-        "pickup_zone":            df["pickup_zone"].astype("int32"),
-        "dropoff_zone":           df["dropoff_zone"].astype("int32"),
-        "hour":                   hour,
-        "dow":                    dow,
-        "month":                  ts.dt.month.astype("int8"),
-        "passenger_count":        df["passenger_count"].astype("int8"),
-        "zone_pair_avg_duration": zone_pair_avg,
-        "hour_dow_avg_duration":  hour_dow_avg,
-        "haversine_km":           dist_km,
+        "pickup_zone":                 df["pickup_zone"].astype("int32"),
+        "dropoff_zone":                df["dropoff_zone"].astype("int32"),
+        "hour":                        hour,
+        "dow":                         dow,
+        "month":                       ts.dt.month.astype("int8"),
+        "passenger_count":             df["passenger_count"].astype("int8"),
+        "zone_pair_avg_duration":      zone_pair_avg,
+        "hour_dow_avg_duration":       hour_dow_avg,
+        "haversine_km":                dist_km,
+        "zone_pair_hour_avg_duration": zone_pair_hour_avg,
     })[FEATURES]
 
 
@@ -147,12 +167,12 @@ def main() -> None:
     print(f"  {len(zone_coords)} zones loaded")
 
     print("Building lookup tables...")
-    zone_pair_lookup, hour_dow_lookup, global_mean = build_lookups(train)
-    print(f"  {len(zone_pair_lookup):,} zone pairs  |  {len(hour_dow_lookup)} hour-dow combos  |  global mean: {global_mean:.1f}s")
+    zone_pair_lookup, hour_dow_lookup, zone_pair_hour_lookup, global_mean = build_lookups(train)
+    print(f"  {len(zone_pair_lookup):,} zone pairs  |  {len(hour_dow_lookup)} hour-dow combos  |  {len(zone_pair_hour_lookup):,} zone-pair-hour combos")
 
-    X_train = engineer_features(train, zone_pair_lookup, hour_dow_lookup, global_mean, zone_coords)
+    X_train = engineer_features(train, zone_pair_lookup, hour_dow_lookup, zone_pair_hour_lookup, global_mean, zone_coords)
     y_train = train["duration_seconds"].to_numpy()
-    X_dev = engineer_features(dev, zone_pair_lookup, hour_dow_lookup, global_mean, zone_coords)
+    X_dev = engineer_features(dev, zone_pair_lookup, hour_dow_lookup, zone_pair_hour_lookup, global_mean, zone_coords)
     y_dev = dev["duration_seconds"].to_numpy()
 
     print("\nTraining XGBoost...")
@@ -180,6 +200,7 @@ def main() -> None:
         "model": model,
         "zone_pair_lookup": {(int(k[0]), int(k[1])): float(v) for k, v in zone_pair_lookup.items()},
         "hour_dow_lookup": {(int(k[0]), int(k[1])): float(v) for k, v in hour_dow_lookup.items()},
+        "zone_pair_hour_lookup": {(int(k[0]), int(k[1]), int(k[2])): float(v) for k, v in zone_pair_hour_lookup.items()},
         "global_mean": global_mean,
         "zone_coords": zone_coords,
     }

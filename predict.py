@@ -21,6 +21,7 @@ with open(_MODEL_PATH, "rb") as _f:
 _MODEL = _ARTIFACT["model"]
 _ZONE_PAIR_DICT: dict[tuple[int, int], float] = _ARTIFACT["zone_pair_lookup"]
 _HOUR_DOW_DICT: dict[tuple[int, int], float] = _ARTIFACT["hour_dow_lookup"]
+_ZONE_PAIR_HOUR_DICT: dict[tuple[int, int, int], float] = _ARTIFACT["zone_pair_hour_lookup"]
 _GLOBAL_MEAN: float = _ARTIFACT["global_mean"]
 _ZONE_COORDS: dict[int, tuple[float, float]] = _ARTIFACT["zone_coords"]
 
@@ -59,12 +60,15 @@ def predict(request: dict) -> float:
     hour, dow = ts.hour, ts.weekday()
     p_lat, p_lon = _ZONE_COORDS.get(pickup, (_NYC_LAT, _NYC_LON))
     d_lat, d_lon = _ZONE_COORDS.get(dropoff, (_NYC_LAT, _NYC_LON))
+    zone_pair_avg = _ZONE_PAIR_DICT.get((pickup, dropoff), _GLOBAL_MEAN)
+    zone_pair_hour_avg = _ZONE_PAIR_HOUR_DICT.get((pickup, dropoff, hour), zone_pair_avg)
     row = [
         pickup, dropoff, hour, dow, ts.month,
         int(request["passenger_count"]),
-        _ZONE_PAIR_DICT.get((pickup, dropoff), _GLOBAL_MEAN),
+        zone_pair_avg,
         _HOUR_DOW_DICT.get((hour, dow), _GLOBAL_MEAN),
         _haversine_km(p_lat, p_lon, d_lat, d_lon),
+        zone_pair_hour_avg,
     ]
 
     x = np.array([row], dtype=np.float32)
